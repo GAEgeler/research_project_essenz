@@ -1,0 +1,1004 @@
+---
+title: "Research project ESSENZ - descriptive analyses"
+author: "Gian-Andrea Egeler"
+date: "2020"
+output: html_document
+---
+
+```{r setup, includc(e=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error = TRUE)
+
+# load packages
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+
+
+# create dir for plots
+if(!dir.exists(here::here("plots/"))){
+  dir.create(here::here("plots/"))
+  message("new directory for plots was created")
+}
+
+
+# create dir for processed data
+if(!dir.exists(here::here("processed data/"))){
+  dir.create(here::here("processed data/"))
+  message("new directory processed data was created")
+}
+
+
+# create dir for stats
+if(!dir.exists(here::here("processed data/stats/"))){
+  dir.create(here::here("processed data/stats"))
+  message("new directory for stats was created")
+}
+
+
+#load data: takes a wile, warnings can be ignored (due to guess-function: expecting numeric, but is character)
+source("R/04_load_till_data_ESSENZ.R", print.eval = FALSE)
+
+#load functions for plotting
+source("R/05_function_plot_intervention.R")
+
+
+#save data
+# readr::write_delim(sell19_agg, file = here::here("processed data/sellings_essenz_2019.csv"), delim = ",")
+# readr::write_delim(sell20_agg, file = here::here("processed data/sellings_essenz_2020.csv"), delim = ",")
+# readr::write_delim(sell20_ind, file = here::here("processed data/sellings_essenz_badge_2020.csv"), delim = ",")
+# readr::write_delim(sellings_tot, file = here::here("processed data/sellings_essenz_2019_2020.csv"), delim = ",")
+
+# double check for duplicates
+sell20_agg %>% 
+  group_by(card_num, trans_date, price, total_amount) %>% 
+  summarise(tot = n()) %>% 
+  #check duple entries
+  filter(tot>1) %>% 
+  #check wheter total_amount differs form the price: if so == duplicates
+  filter(price == total_amount)
+
+
+
+
+```
+
+
+```{r overall stats}
+
+length(sell19_agg$date)
+length(sell20_agg$date)
+
+sell19_agg %>% 
+  group_by(canteen_name) %>% 
+  summarise(tot = n()) %>% 
+  mutate(pct = tot / sum(tot))
+
+sell20_agg %>% 
+  group_by(canteen_name) %>% 
+  summarise(tot = n()) %>% 
+  mutate(pct = tot / sum(tot))
+
+```
+
+
+
+```{r articles 2019 vs. 2020}
+# prepare data => write a function
+df <- sellings_tot %>% 
+  #change some meal lines, due to better comparison
+  mutate(article = stringr::str_replace(article, " gross| klein", "")) %>%  #delete that words
+  mutate(article = stringr::str_replace(article, "global|hot green market", "global/\nhot green market")) %>% 
+  mutate(article = stringr::str_replace(article, "soul|vegi", "soul/vegi")) %>% 
+  mutate(article = stringr::str_replace(article, "classic|tagesmenu$", "classic/\ntagesmenu")) %>% 
+  group_by(year, canteen_name, article) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  ungroup() 
+  
+  
+# text
+df_t <- df %>% 
+  group_by(year, canteen_name) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  mutate(xlab_ = paste0("(n = ", tot,")"),
+         # xlab_2 = paste(canteen_name, year, sep = " "),
+         xlab = paste(year, xlab_, sep = "\n")) %>% 
+  ungroup() %>% 
+  left_join(df, ., by = c("canteen_name", "year"))
+  
+
+#for help see: https://stackoverflow.com/questions/14840542/place-a-legend-for-each-facet-wrap-grid-in-ggplot2
+library(gridExtra)
+
+col = c(#hot and cold buffet
+        "bowl" = "#DDDDDD", 
+        "free choice buffet" = "#DDDDDD",
+        "global/\nhot green market" = "#DDDDDD",
+        
+        "salatteller" = "#EEEEBB",
+       
+        #tagesmenu, classic, traditonal same
+        "classic/\ntagesmenu" = "#FFCCCC",
+        "tagesmenu traditional" = "#FFCCCC",  
+        "traditional" = "#FFCCCC",
+        
+        "exquisit" = "#ba9191", # expensive meal line
+        
+        #vegie meals
+        "soul/vegi" = "#CCDDAA", 
+        "tagesmenu veggie" = "#CCDDAA",
+        "veggie" = "#CCDDAA"
+       )
+
+
+
+#salatteller => yellow; vegi => light green
+
+xs <- split(df_t,f = df_t$canteen_name)
+p1 <- ggplot(xs$Kontroll, aes(x = xlab, y = pct, fill = article)) +
+  geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    # scale_fill_brewer("Set3", type = "qual") + 
+    scale_fill_manual(values = col) +
+    scale_y_origin(labels = scales::percent) +
+    guides(fill = guide_legend("")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")), 
+              position = position_stack(reverse = F, vjust = .5), size = 22 * converter) +
+    labs(y = "", x = "") +
+    facet_grid(~canteen_name) +
+    mytheme
+
+p2 <- p1 %+% xs$Prompt
+p3 <- p1 %+% xs$Commit
+
+p <- grid.arrange(p1,p2,p3, nrow = 1)
+
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "meal_line_overall_grid_20201213.pdf"),
+       height = 12,
+       width = 27,
+       device = cairo_pdf)
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "meal_line_overall_grid_20201213.png"),
+       height = 12,
+       width = 27,
+       device = "png")
+
+
+```
+
+
+```{r over time: corona effect}
+#prepare data
+df <- sellings_tot %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  group_by(year, canteen_name, kw) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  ungroup() 
+
+# txt
+df_t <- df %>% 
+  group_by(year, canteen_name) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  ungroup() %>% 
+  mutate(guide_leg_ = paste(canteen_name, year, sep = " "),
+         num = format(.$tot, big.mark = "'", scientific = F),
+         txt = paste0("(", num, " Menüverkäufe", ")"),
+         guide_leg = paste(guide_leg_, txt, sep = "\n")) %>% 
+  left_join(., df, by = c("year", "canteen_name"))
+
+#plot
+# colors needs to be adapted
+p <- ggplot(df_t, aes(x = kw, y = tot_sold, color = forcats::lvls_reorder(factor(guide_leg), idx = c(3, 4, 5, 6, 1, 2)), group = guide_leg)) +
+  geom_point(stat = "identity", size = 5) + #aes(shape = factor(year) (http://www.sthda.com/english/wiki/ggplot2-point-shapes)
+  geom_line(size = 2.1) +
+  scale_color_manual(values = c("#90b09c", "#BDD0C4", "#9AB7D3", "#bed0e2", "#b990e1", "#DFCCF1")) +
+  scale_y_origin(breaks = scales::breaks_extended(6),
+                     labels = scales::label_number(big.mark = "'"),
+                 limits = c(0, 3500)) +
+  scale_x_origin(breaks = seq(34, 44, 1), limits = c(34, 44)) +
+  guides(color = guide_legend("Personalrestaurant", keyheight = 3, keywidth = 1), shape = FALSE) +
+  labs(y = "Menüverkäufe pro Woche", x = "") +
+  mytheme
+
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "meal_sales_overall_20201213.pdf"),
+       height = 12,
+       width = 20,
+       device = cairo_pdf)
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "meal_sales_overall_20201213.png"),
+       height = 12,
+       width = 20,
+       device = "png")
+
+```
+
+
+
+```{r meal_content 2019 vs. 2020}
+
+# prepare data
+df <- sellings_tot %>% 
+  group_by(year, canteen_name, meal_content) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  ungroup()
+
+# text
+df_t <- df %>% 
+  group_by(year, canteen_name) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  mutate(xlab_ = paste0("(n = ", tot,")"),
+         # xlab_2 = paste(canteen_name, year, sep = " "),
+         xlab = paste(year, xlab_, sep = "\n")) %>% 
+  ungroup() %>% 
+  left_join(df, ., by = c("canteen_name", "year")) %>% 
+  mutate(canteen_name = factor(canteen_name, levels = c("Kontroll", "Prompt", "Commit")))
+  
+
+#plot
+#facet names: https://stackoverflow.com/questions/3472980/how-to-change-facet-labels
+val = c("buffet" = "#DDDDDD",
+        "meat" = "#FFCCCC",
+        "ovo-lakto-vegetarian" = "#CCDDAA",
+        "vegan" = "#EEEEBB")
+
+
+#try to do the same plot as in efz
+p <- ggplot(df_t, aes(x = xlab, y = pct, fill = meal_content)) +
+    geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    scale_y_origin(labels = scales::percent) +
+    # scale_x_origin_dis()+
+    scale_fill_manual(values = val, labels = c("Buffet (Kalt/Warm)", "Fleisch", "Ovo-lakto-vegetarisch", "Vegan")) +
+    guides(fill = guide_legend("")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")),
+              position = position_stack(reverse = F, vjust = .5), size = 22 * converter) +
+    labs(y = "Anteil Menüverkäufe in Prozent", x = "") +
+    facet_wrap(~canteen_name, scales = "free") +
+    mytheme
+
+
+ggsave(plot = p,
+       filename = here::here("plots/", "meal_content_overall_facet_20201213.pdf"),
+       height = 12,
+       width = 19,
+       device = cairo_pdf)
+
+ggsave(plot = p,
+       filename = here::here("plots/", "meal_content_overall_facet_20201213.png"),
+       height = 12,
+       width = 19,
+       device = "png")
+
+```
+
+```{r overall MNI_label 2020: kw37 bis kw40}
+
+df <- sell20_agg %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  filter(kw >= 37 & kw <= 40) %>% 
+  group_by(canteen_name, mni_label) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  mutate(mni_label = if_else(is.na(mni_label), "kein MNI", mni_label)) %>% 
+  ungroup()
+
+# text
+df_t <- df %>% 
+  group_by(canteen_name) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  ungroup() %>% 
+  left_join(df, ., by = c("canteen_name"))
+  
+#overall
+df_p <- df %>% 
+  group_by(mni_label) %>% 
+  summarise(tot_mni = sum(tot_sold)) %>% 
+  mutate(pct = tot_mni / sum(tot_mni)) %>% 
+  ungroup() %>% 
+  #add tot of alle
+  mutate(tot = sum(tot_mni)) %>% 
+  mutate(canteen_name = "Alle") %>% 
+  bind_rows(., df_t) %>% 
+  mutate(xlab_ = paste0("(n = ", tot,")"),
+         xlab = paste(canteen_name, xlab_, sep = "\n")) 
+
+#plot
+pal = c("Erde" = "#D2DDCF",
+        "Erde&Herz" = "#FEECD4",
+        "Herz" = "#ECC7B4",
+        "kein MNI" = "#EFF0EA")
+
+p <- ggplot(df_p, aes(x = forcats::lvls_reorder(factor(xlab), idx = c(1, 3, 4, 2)), y = pct, fill = factor(mni_label, levels = c("erde", "erde, herz", "herz", "kein MNI"), labels = attributes(pal)$names))) +
+  geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    scale_fill_manual(values = pal) + 
+    scale_y_origin(labels = scales::percent) +
+    guides(fill = guide_legend("")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")), 
+              position = position_stack(reverse = F, vjust = .5), size = 22 * converter) +
+    labs(y = "Anteil Menüverkäufe in Prozent", x = "") +
+    mytheme
+    
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "mni_overall_intervention_20201213.pdf"),
+       height = 9,
+       width = 12,
+       device = cairo_pdf)
+
+
+ggsave(plot = p, 
+       filename = here::here("plots/", "mni_overall_intervention_20201213.png"),
+       height = 9,
+       width = 12,
+       device = "png")
+
+
+```
+
+
+
+```{r invervention per canteen: 17.8.2020 bis 30.10.2020}
+#define color palette of fill_value (i.e. mni_label)
+pal = c("Erde" = "#D2DDCF",
+        "Erde&Herz" = "#FEECD4",
+        "Herz" = "#ECC7B4",
+        "kein MNI" = "#EFF0EA")
+
+#define new labels, order matters
+old_labs = c("erde", "erde, herz", "herz", "kein MNI")
+new_labs = c("Erde", "Erde&Herz", "Herz", "kein MNI")
+
+#plot prompt_canteen
+# define order of xlab => not jet working
+def_lev = c("intro_mni", "baseline",  "aufsteller", "aufsteller_miniPlakat", "aufsteller_screen", "post", "nachhaltigkeitswoche")
+
+def_lev_new = c("Einführung MNI" ,"Baseline", "Austeller", "Aufsteller&Plakat", "Aufsteller&Monitor", "nach Intervention", "Nachhaltigkeitswoche")
+
+plot_intervention(sell20_agg, canteen_pr = "Prompt", save = TRUE,
+                  height = 14, width = 24)
+
+#plot commit_canteen
+def_lev = c("intro_mni", "baseline",   "intro_cups", "intervention_1", "intervention_2", "keine", "post",  "nachhaltigkeitswoche")
+
+def_lev_new = c("Einführung MNI", "Baseline",  "Einführung\nBecher", "Intervention Wo1", "Intervention Wo2", "keine\n Intervention", "nach\n Intervention", "Nachhaltigkeitswoche")
+
+plot_intervention(sell20_agg, canteen_pr = "Commit", save = TRUE,
+                  height = 14, width = 24)
+
+#plot kontroll_canteen
+def_lev = c("intro_mni", "baseline", "keine", "post", "nachhaltigkeitswoche")
+
+def_lev_new = c("Einführung MNI","Baseline",  "keine Intervention","nach Intervention", "Nachhaltigkeitswoche")
+
+plot_intervention(sell20_agg, canteen_pr = "Kontroll", save = TRUE,
+                  height = 14, width = 18)
+
+```
+
+```{r stats per canteen}
+########
+#commit
+df <- sell20_agg %>%
+    dplyr::filter(canteen_name == "Commit") %>% 
+    dplyr::group_by(date, canteen_name, intervention, mni_label) %>% 
+    dplyr::summarise(tot_sold = n()) %>% 
+    dplyr::mutate(pct = tot_sold / sum(tot_sold)) %>% 
+    ungroup() %>% 
+    drop_na(intervention) %>% 
+    dplyr::mutate(mni_label = dplyr::if_else(is.na(mni_label), "kein MNI", mni_label)) %>% 
+  dplyr::filter(mni_label != "erde, herz") %>%  #erde, herz can be droped due to small observations
+  dplyr::mutate(mni_label = factor(mni_label, levels = c("kein MNI", "erde", "herz"))) %>% 
+  dplyr::mutate(intervention = factor(intervention, levels = c("baseline", "intro_mni",  "intervention_1", "intervention_2", "keine")))
+  
+
+#check for homogenity
+boxplot(df$tot_sold ~ df$mni_label) %>% ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_commit_mni_label.png"), device = "png") #not that good
+boxplot(df$tot_sold ~ df$intervention) %>% ggplot2::ggsave(filename = here::here("processed data/stats", "boxplot_commit_intervention.png"), device = "png")#ok
+
+lm1 <- glm(log10(tot_sold) ~ intervention * mni_label, data = df, family = gaussian, na.action = na.omit)
+summary(lm1) %>% 
+  capture.output(., file = here::here("processed data/stats", paste0("glm_", "commit", "_condit_meal_label.txt")))
+
+#check for normality and 
+par(mfrow = c(2,2))
+plot(lm1)
+
+#interactionplot
+par(mfrow = c(1,1))
+interaction.plot(response = df$tot_sold, trace.factor = df$mni_label, x.factor = df$intervention, xlab = "Intervention",trace.label = "MNI-Label") %>% ggsave( filename = 
+  here::here("processed data/stats", paste0("interactionplot_", "commit", ".png")), device = "png")
+dev.off()
+
+########
+#prompt
+df <- sell20_agg %>%
+    dplyr::filter(canteen_name == "Prompt") %>% 
+    dplyr::group_by(date, canteen_name, intervention, mni_label) %>% 
+    dplyr::summarise(tot_sold = n()) %>% 
+    dplyr::mutate(pct = tot_sold / sum(tot_sold)) %>% 
+    ungroup() %>% 
+    drop_na(intervention) %>% 
+    dplyr::mutate(mni_label = dplyr::if_else(is.na(mni_label), "kein MNI", mni_label)) %>% 
+  dplyr::mutate(mni_label = factor(mni_label, levels = c("kein MNI", "erde", "erde, herz", "herz"))) %>% 
+  dplyr::mutate(intervention = factor(intervention, levels = c("baseline", "intro_mni",  "aufsteller", "aufsteller_miniPlakat", "aufsteller_screen", "keine")))
+
+#check for homogenity
+boxplot(df$tot_sold ~ df$mni_label) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_prompt_mni_label.png"), device = "png") #ok
+boxplot(df$tot_sold ~ df$intervention) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_prompt_intervention.png"), device = "png") #ok, normality not that good
+
+lm1 <- glm(log10(tot_sold) ~ intervention * mni_label, data = df, family = gaussian)
+summary(lm1) %>% 
+  capture.output(., file = here::here("processed data/stats", paste0("glm_", "prompt", "_condit_meal_label.txt")))
+
+#check for normality and 
+par(mfrow = c(2,2))
+plot(lm1) 
+dev.off()
+
+summary(lm1) %>% 
+
+#interactionplot
+par(mfrow = c(1,1))
+interaction.plot(response = df$tot_sold, trace.factor = df$mni_label, x.factor = df$intervention, xlab = "Intervention",trace.label = "MNI-Label") %>% ggsave( filename = 
+  here::here("processed data/stats", paste0("interactionplot_", "prompt", ".png")), device = "png")
+dev.off()
+
+
+########
+#controll
+df <- sell20_agg %>%
+    dplyr::filter(canteen_name == "Kontroll") %>% 
+    dplyr::group_by(date, canteen_name, intervention, mni_label) %>% 
+    dplyr::summarise(tot_sold = n()) %>% 
+    dplyr::mutate(pct = tot_sold / sum(tot_sold)) %>% 
+    ungroup() %>% 
+    # drop_na(mni_label)
+    dplyr::mutate(mni_label = dplyr::if_else(is.na(mni_label), "kein MNI", mni_label)) %>% 
+  dplyr::mutate(mni_label = factor(mni_label, levels = c("kein MNI", "erde", "erde, herz", "herz"))) %>% 
+  dplyr::mutate(intervention = factor(intervention, levels = c("baseline", "intro_mni",  "keine")))
+
+#check for homogenity
+boxplot(df$tot_sold ~ df$mni_label) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_kontroll_mni_label.png"), device = "png") #ok
+boxplot(df$tot_sold ~ df$intervention) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_kontroll_intervention.png"), device = "png")#ok
+
+lm1 <- glm(log10(tot_sold) ~ intervention * mni_label, data = df, family = gaussian)
+summary(lm1) %>% 
+  capture.output(., file = here::here("processed data/stats", paste0("glm_", "kontroll", "_condit_meal_label.txt")))
+
+#check for normality and 
+par(mfrow = c(2,2))
+plot(lm1) #normality not that good
+dev.off()
+
+#interactionplot
+par(mfrow = c(1,1))
+interaction.plot(response = df$tot_sold, trace.factor = df$mni_label, x.factor = df$intervention, xlab = "Intervention", trace.label = "MNI-Label") %>% ggsave( filename = 
+  here::here("processed data/stats", paste0("interactionplot_", "kontroll", ".png")), device = "png")
+dev.off()
+
+
+
+```
+
+
+```{r compare the interventions between the canteens: 21.09 - 25.09.2020 (same menu offer)}
+
+#filter: only one week 21.09 - 25.09.2020
+df <- sell20_agg %>% 
+  filter(date < "2020-09-26" & date > "2020-09-20") %>% 
+  group_by(canteen_name, date, intervention, mni_label) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  ungroup() %>% 
+  mutate(mni_label = if_else(is.na(mni_label), "kein MNI", stringr::str_to_title(mni_label))) 
+
+#add text
+df_t <- df %>% 
+  group_by(date, canteen_name) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  mutate(xlab_ = paste0("(n = ", tot,")"),
+         xlab = paste(stringr::str_to_title(canteen_name), xlab_, sep = "\n")) %>% 
+  ungroup() %>% 
+  left_join(df, ., by = c("canteen_name", "date")) %>% 
+  mutate(interv = case_when(intervention == "aufsteller_miniPlakat" ~ "Aufsteller&Plakat",
+                            intervention == "aufsteller_screen" ~ "Aufsteller&Monitor",
+                            intervention == "intervention_2" ~ "Intervention",
+                            intervention == "keine" ~ "keine")) %>% 
+  mutate(xlab_t = paste(interv, xlab, sep = "\n"))
+
+
+#plot
+pal = c("#D2DDCF",
+        "#FEECD4",
+        "#ECC7B4",
+        "#EFF0EA")
+
+pal = c("Erde" = "#D2DDCF",
+        "Erde&Herz" = "#FEECD4",
+        "Herz" = "#ECC7B4",
+        "kein MNI" = "#EFF0EA")
+
+
+p <- ggplot(df_t, aes(x = forcats::lvls_reorder(factor(xlab_t), idx = c(12, 3, 10, 15, 5, 8, 14, 4, 6, 13, 2, 7, 11, 1, 9)), y = pct, fill = mni_label)) +
+    geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = pal) +
+    guides(fill = guide_legend("MNI-Label")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")),
+              position = position_stack(reverse = F, vjust = .5), size = 22 * converter) +
+    labs(y = "Anteil Menüverkäufe in Prozent", x = "") +
+    facet_grid(.~date, scales = "free") +
+    mytheme 
+
+#there would still be some fine tuning
+p_h <- ggplot(df_t, aes(x = forcats::lvls_reorder(factor(xlab_t), idx = c(12, 3, 10, 15, 5, 8, 14, 4, 6, 13, 2, 7, 11, 1, 9)), y = pct, fill = mni_label)) +
+    geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = pal) +
+    guides(fill = guide_legend("MNI-Label")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")),
+              position = position_stack(reverse = F, vjust = .5), size = 22 * converter) +
+    labs(y = "", x = "") +
+    coord_flip() +
+    ggplot2::facet_wrap(~ date,  scales = "free_y", ncol = 1, strip.position = "left", drop = TRUE) +
+    mytheme +
+    theme(legend.position = "bottom", 
+          strip.text = ggplot2::element_text(size=22),
+        strip.background.x = ggplot2::element_blank(), #background color to blanc facet wraps
+        # remove facet spacing on x-direction
+        strip.placement = 'outside',
+        panel.spacing.x = ggplot2::unit(0, "lines"))
+
+#save
+ggsave(plot = p,
+       filename = here::here("plots/", "mni_intervention_compare_20201221.pdf"),
+       height = 20,
+       width = 40,
+       device = cairo_pdf)
+
+ggsave(plot = p,
+       filename = here::here("plots/", "mni_intervention_compare_20201221.png"),
+       height = 16,
+       width = 40,
+       device = "png")
+
+```
+
+
+```{r stats identical content and interventions}
+
+df <- sell20_agg %>% 
+  filter(date < "2020-09-26" & date > "2020-09-20") %>% 
+  group_by(canteen_name, date, intervention, mni_label) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  ungroup() %>% 
+  mutate(mni_label = if_else(is.na(mni_label), "kein MNI", stringr::str_to_title(mni_label))) %>% 
+  mutate(intervention = factor(intervention, levels = c("keine", "intervention_2", "aufsteller_miniPlakat", "aufsteller_screen"))) %>% 
+  mutate(mni_label = factor(mni_label, levels = c("kein MNI", "Herz", "Erde")))
+
+#boxplots
+par(mfrow = c(1,1))
+boxplot(df$tot_sold ~ df$intervention) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_intervention_identical_meals.png"), device = "png")# intervention_2 seemed to be critical, means seems no to be close to 0
+boxplot(df$tot_sold ~ df$mni_label) %>% 
+  ggplot2::ggsave(., filename = here::here("processed data/stats", "boxplot_mni_label_identical_meals.png"), device = "png")# looks good
+
+#glm: without date
+lm1 <- glm(log10(tot_sold) ~ intervention*mni_label, data = df, family = "gaussian")
+summary(lm1) %>% 
+  capture.output(., file = here::here("processed data/stats/glm_identical_meals.txt"))
+
+#diagnostic
+par(mfrow = c(2,2))
+plot(lm1) #there was no homogenity between the conditions, thus log transformation
+
+
+#interactionplot
+interaction.plot(df$tot_sold, x.factor = df$intervention, trace.factor = df$mni_label, ylab = "durchschnittliche Menüverkäufe", xlab = "Intervention",trace.label = "MNI-Label") %>% ggsave(., filename =  here::here("plots/interaction_plot_identical_meals_intervention_mni_label.png"), device = "png")
+
+#glm: with date (brings no useful information)
+lm2 <- glm(log10(tot_sold) ~ mni_label*as.factor(date), data = df, family = "gaussian")
+summary(lm2) %>% 
+  capture.output(., file = here::here("processed data/stats/glm_identical_meals_intervention_mni_label_date.txt"))
+
+
+```
+
+
+
+```{r analyse relative buyings: share of mni compared to the hole buyings: only kw39}
+
+#bring the data into withe format
+#how many mni buyings overall (not per week)
+df_wide <-  sell20_agg %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  filter(kw >= 34 & kw <=40) %>% 
+  #drop duplicates => cant be count for that statistics (minus 3039): are duplicates which payed more than for one person
+  filter(!duplicated(trans_date)) %>% 
+  filter(meal_content != "buffet") %>% 
+  mutate(mni_label = if_else(is.na(mni_label), "kein MNI", mni_label)) %>%
+  #summarize all mni_buyings per card_num
+  group_by(card_num, mni_label, canteen_name, date) %>% 
+  summarise(n = n()) %>% 
+  tidyr::drop_na(card_num) %>% 
+  ungroup() %>% 
+  tidyr::pivot_wider(names_from = "mni_label", values_from = "n") %>% 
+  janitor::clean_names()
+
+
+#some little stats
+df_wide %>% 
+  group_by(card_num, canteen_name) %>% 
+  summarise(tot = n()) %>% 
+  ungroup() %>% 
+  group_by(canteen_name) %>% 
+  summarise(n = n()) %>% 
+  mutate(pct = n / sum(n),
+         sum = sum(n))
+
+
+#how to account for low buyings: i would exclude them => at least 6-7 buyings per two weeks?
+df_mni_sell <- df_wide %>% 
+  #count
+  mutate(row_sum_mni_id = rowSums(.[5:7], na.rm = TRUE), #sum of alls erde, erde, herz and herz
+         row_sum_tot_id = rowSums(.[4:7], na.rm = TRUE))
+
+
+#split per base 
+df_mni_base <- df_mni_sell %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  filter(kw <= 36 & kw >= 34) %>%
+  # pivot_longer(., cols = c("date"), names_to = "mni", values_to = "tot")
+  group_by(card_num, canteen_name) %>% 
+  summarise(tot_sold = sum(row_sum_tot_id),
+            tot_mni = sum(row_sum_mni_id)) %>% 
+  mutate(mni_buy = tot_mni / tot_sold) %>% 
+  ungroup() %>% 
+  mutate(source = "base") %>% 
+  mutate(mni_cut = cut(.$mni_buy, breaks = c(-Inf, 0, .24, .49, .74, Inf), labels = c("MNI-Nicht-Wähler", "MNI-Selten-Wähler", "MNI-Gelegenheitswähler", "MNI-Regelmässig-Wähler", "MNI-Stammwähler"))) %>% 
+  mutate(mni_bin = ntile(.$mni_buy, 4))
+
+
+#show 
+table(df_mni_base$mni_cut)
+round(prop.table(table(df_mni_base$mni_cut))*100, 1) #per week
+sum(df_mni_base$tot_sold)
+
+#split per intervention
+df_mni_int <- df_mni_sell %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  filter(kw <= 40 & kw >= 37) %>%
+  # pivot_longer(., cols = c("date"), names_to = "mni", values_to = "tot")
+  group_by(card_num, canteen_name) %>% 
+  summarise(tot_sold = sum(row_sum_tot_id),
+            tot_mni = sum(row_sum_mni_id)) %>% 
+  mutate(mni_buy = tot_mni / tot_sold) %>% 
+  ungroup() %>% 
+  mutate(source = "intervention") %>% 
+  mutate(mni_cut = cut(.$mni_buy, breaks = c(-Inf, 0, .24, .49, .74, Inf), labels = c("MNI-Nicht-Wähler", "MNI-Selten-Wähler", "MNI-Gelegenheitswähler", "MNI-Regelmässig-Wähler", "MNI-Stammwähler"))) %>% 
+  mutate(mni_bin = ntile(.$mni_buy, 4))
+
+#show stats
+table(df_mni_int$mni_cut)
+round(prop.table(table(df_mni_int$mni_cut))*100, 1) #per week
+sum(df_mni_int$tot_sold) #seems to differ after the merge, why?
+
+
+#people which were in both weeks at least one time (2342)
+df_mni <- bind_rows(df_mni_base, df_mni_int)
+df_mni %>% group_by(card_num) %>% summarise(n = n()) %>% filter(n > 1)
+sum(df_mni$tot_sold)
+
+
+#get all transactions for base
+df_base <- sell20_agg %>% 
+  mutate(kw = lubridate::isoweek(date)) %>%
+  filter(kw <= 36 & kw >= 34) %>%
+  filter(meal_content != "buffet") %>% 
+  right_join(., df_mni_base[, c("card_num", "canteen_name", "mni_cut")], by = c("card_num", "canteen_name")) %>%   
+  #drop na in mni_cut, due to cash payers
+  tidyr::drop_na(card_num)  %>%
+  mutate(interv = case_when(intervention == "intro_mni" ~ "Einführung MNI",
+                            intervention == "baseline" ~ "Baseline",
+                            intervention == "intro_cups" ~ "Intervention",
+                            intervention == "intervention_1" ~ "Intervention",
+                            intervention == "intervention_2" ~ "Intervention",
+                            intervention == "aufsteller" ~ "Intervention",
+                            intervention == "aufsteller_screen" ~ "Intervention",
+                            intervention == "aufsteller_miniPlakat" ~ "Intervention",
+                            intervention == "keine" ~ "keine Interv.", #not of interest
+                            TRUE ~ intervention)) %>% 
+  drop_na(interv) %>% 
+  group_by(canteen_name, interv, mni_cut) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  ungroup()
+
+#get all transactions for intervention
+df_interv <- sell20_agg %>% 
+  mutate(kw = lubridate::isoweek(date)) %>%
+  filter(kw <= 40 & kw >= 37)%>%
+  filter(meal_content != "buffet") %>% 
+  right_join(., df_mni_int[, c("card_num", "canteen_name", "mni_cut")], by = c("card_num", "canteen_name")) %>%   
+  #drop na in mni_cut, due to cash payers
+  tidyr::drop_na(mni_cut)  %>%
+  mutate(interv = case_when(intervention == "intro_mni" ~ "Einführung MNI",
+                            intervention == "baseline" ~ "Baseline",
+                            intervention == "intro_cups" ~ "Intervention",
+                            intervention == "intervention_1" ~ "Intervention",
+                            intervention == "intervention_2" ~ "Intervention",
+                            intervention == "aufsteller" ~ "Intervention",
+                            intervention == "aufsteller_screen" ~ "Intervention",
+                            intervention == "aufsteller_miniPlakat" ~ "Intervention",
+                            intervention == "keine" ~ "keine Interv.", #not of interest
+                            TRUE ~ intervention)) %>% 
+  drop_na(interv) %>% 
+  group_by(canteen_name, interv, mni_cut) %>% # meal_line is not a good variable, lots of missings
+  summarise(tot_sold = n()) %>% 
+  mutate(pct = tot_sold / sum(tot_sold)) %>% 
+  ungroup()
+
+#sellings per base and intervention
+df <-  bind_rows(df_interv, df_base)
+  
+
+#add text
+df_t <- df %>% 
+  group_by(canteen_name, interv) %>% 
+  summarise(tot = sum(tot_sold)) %>% 
+  mutate(xlab_ = paste0("(n = ", tot,")"),
+         xlab = paste(interv, xlab_, sep = "\n")) %>% 
+  ungroup() %>% 
+  left_join(df, ., by = c("canteen_name", "interv")) %>% 
+  mutate(canteen_name = factor(canteen_name, levels = c("Kontroll", "Prompt", "Commit")))
+
+
+
+#plot 
+pal = c("MNI-Nicht-Wähler" = "grey80",
+        "MNI-Selten-Wähler" = "#CCC2CD",
+        "MNI-Gelegenheitswähler" = "#DBE8D9",
+        "MNI-Regelmässig-Wähler" = "#DAF3FF",
+        "MNI-Stammwähler" = "#7A92B3"
+        )
+
+
+
+p <- ggplot(df_t, aes(x = forcats::lvls_reorder(factor(xlab), idx = c(4, 1, 10, 5, 2, 7, 11, 6, 3, 8, 9)) , y = pct, fill = mni_cut)) +
+    geom_bar(stat = "identity", position = position_stack(), width = .6) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = pal) +
+    guides(fill = guide_legend("MNI-Label")) +
+    geom_text(aes(label = if_else(pct > 0.02, scales::percent(pct, accuracy = 1), "")),
+              position = position_stack(reverse = F, vjust = .5), size = 22*converter) +
+    labs(y = "Anteil Menüverkäufe in Prozent", x = "") +
+    facet_grid(.~ canteen_name, scales = "free") +
+    mytheme
+
+
+ggsave(plot = p,
+       filename = here::here("plots/", "mni_intervention_compare_mni_cut_20201221.pdf"),
+       height = 18,
+       width = 30,
+       device = cairo_pdf)
+
+ggsave(plot = p,
+       filename = here::here("plots/", "mni_intervention_compare_mni_cut_20201221.png"),
+       height = 14,
+       width = 30,
+       device = "png")
+
+
+```
+
+
+
+```{r mni pattern, gender, age: the hole time kw34 till kw40}
+
+#prepare data
+df_mni_sell <- df_wide %>% 
+  mutate(kw = lubridate::isoweek(date)) %>% 
+  filter(kw <= 40 & kw >= 34) %>%
+  #count
+  mutate(row_sum_mni_id = rowSums(.[5:7], na.rm = TRUE), #sum of alls erde, erde, herz and herz
+         row_sum_tot_id = rowSums(.[4:7], na.rm = TRUE)) %>%
+  # pivot_longer(., cols = c("date"), names_to = "mni", values_to = "tot")
+  group_by(card_num, canteen_name) %>% 
+  summarise(tot_sold = sum(row_sum_tot_id),
+            tot_mni = sum(row_sum_mni_id)) %>% 
+  mutate(mni_buy = tot_mni / tot_sold) %>% 
+  ungroup()  %>% 
+  mutate(mni_cut = cut(.$mni_buy, breaks = c(-Inf, 0, .24, .49, .74, Inf), labels = c("MNI-Nicht-Wähler", "MNI-Selten-Wähler", "MNI-Gelegenheitswähler", "MNI-Regelmässig-Wähler", "MNI-Stammwähler"))) %>% 
+  mutate(mni_bin = ntile(.$mni_buy, 4)) 
+
+
+#prepare data
+ds <- sell20_ind %>% 
+  left_join(., df_mni_sell[, c("card_num", "canteen_name", "mni_cut")], by = c("card_num", "canteen_name")) %>%
+  #create age_groups
+  mutate(age_groups = cut(.$age, breaks = c(-Inf, 26, 36, 50, Inf), labels = c("18- bis 26-jährige", "27- bis 36-jährige", "37- bis 50-jährige", "51- bis 62-jährige"))) %>% 
+  drop_na(mni_cut) #missing transactions contain buffet and duble transactions
+
+  
+######
+# gender + mni_categoriey
+#####
+
+#prepare data
+ds_p <- ds %>% 
+  # group
+  group_by(card_num, gender, mni_cut) %>% 
+  summarise(tot_sold = n()) %>% 
+  ungroup() %>% 
+  #drop missings in gender (-2)
+  drop_na(gender) %>% 
+  #drop tot_sold are not in that interessted
+  select(-tot_sold) %>% 
+  group_by(gender, mni_cut) %>% 
+  summarise(share = n()) %>% 
+  mutate(pct = share / sum(share)) %>% 
+  ungroup()
+  
+
+#txt
+ds_p %<>% 
+  group_by(gender) %>% 
+  summarise(tot_t = sum(share)) %>% 
+  ungroup() %>% 
+  left_join(., ds_p, by = c("gender")) %>% 
+  mutate(xlab_ = paste0("(n = ", tot_t, ")"),
+         xlab = paste(if_else(gender == "f", "Frau", "Mann"), xlab_, sep = "\n"))
+
+#overall
+ds_t <- ds_p %>% 
+  group_by(mni_cut) %>% 
+  summarise(tot_t = sum(share)) %>% 
+  mutate(pct = tot_t / sum(tot_t),
+         gender = "Alle") %>% 
+  ungroup() %>% 
+  mutate(xlab_ = paste0("(n =", sum(tot_t), ")"),
+         xlab = paste(gender, xlab_, sep = "\n")) %>% 
+  bind_rows(., ds_p)
+  
+
+#plot 
+pal = c("MNI-Nicht-Wähler" = "grey80",
+        "MNI-Selten-Wähler" = "#CCC2CD",
+        "MNI-Gelegenheitswähler" = "#DBE8D9",
+        "MNI-Regelmässig-Wähler" = "#DAF3FF",
+        "MNI-Stammwähler" = "#7A92B3"
+        )
+
+p <- ggplot(ds_t, aes(y = pct, x = forcats::fct_rev(xlab), fill = mni_cut)) +
+  geom_bar(stat = "identity", width = .6) +
+  geom_text(aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size =  22 * converter)+
+  scale_fill_manual(values = pal) +
+  scale_y_origin(labels = scales::percent) +
+  labs(x = "", y = "") +
+  guides(fill = guide_legend(title = "", reverse = TRUE, nrow = 2)) +
+  coord_flip() +
+  mytheme +
+  theme(legend.position = "bottom")
+  
+
+
+ggsave(filename = here::here("plots/", paste0("mni_gender_", format(Sys.time(), "%Y%m%d"), ".pdf")),
+       plot = p,
+       height = 6, 
+       width = 16,
+       device = cairo_pdf)
+
+ggsave(filename = here::here("plots/", paste0("mni_gender_", format(Sys.time(), "%Y%m%d"), ".png")),
+       plot = p,
+       height = 6, 
+       width = 16,
+       device = "png")
+
+######
+# age_groups + mni_categoriey: with only 32 persons, not really meaningful
+#####
+
+#prepare data
+ds_p <- ds %>% 
+  group_by(card_num, age_groups, mni_cut) %>% 
+  summarise(tot_sold = n()) %>% 
+  ungroup() %>% 
+  #drop missings in gender (-13)
+  drop_na(age_groups) %>% 
+  #drop tot_sold are not in that interessted
+  select(-tot_sold) %>% 
+  group_by(age_groups, mni_cut) %>% 
+  summarise(share = n()) %>% 
+  mutate(pct = share / sum(share)) %>% 
+  ungroup()
+  
+
+#txt
+ds_p %<>% 
+  group_by(age_groups) %>% 
+  summarise(tot_t = sum(share)) %>% 
+  ungroup() %>% 
+  left_join(., ds_p, by = c("age_groups")) %>% 
+  mutate(xlab_ = paste0("(n = ", tot_t, ")"),
+         xlab = paste(age_groups, xlab_, sep = "\n"))
+
+
+#plot itself
+p <- ggplot(ds_p, aes(y = pct, x = forcats::fct_rev(xlab), fill = mni_cut)) +
+  geom_bar(stat = "identity", width = .6) +
+  geom_text(aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 22 * converter)+
+  scale_fill_manual(values = pal) +
+  labs(x = "", y = "") +
+  guides(fill = guide_legend(title = "",reverse = TRUE, nrow = 2)) +
+  coord_flip() +
+  mytheme +
+  theme(legend.position = "bottom") +
+  scale_y_origin(labels = scales::percent)
+
+
+ggsave(filename = here::here("plots/", paste0("mni_age_", format(Sys.time(), "%Y%m%d"), ".pdf")),
+       plot = p,
+       height = 6, 
+       width = 15,
+       device = cairo_pdf)
+
+ggsave(filename = here::here("plots/", paste0("mni_age_", format(Sys.time(), "%Y%m%d"), ".png")),
+       plot = p,
+       height = 6, 
+       width = 15,
+       device = "png")
+
+
+
+```
+
+
+
+```{r mostsold menus per canteen}
+
+canteen_name <- unique(sell20_agg$canteen_name)
+
+for (i in canteen_name) {
+  
+  #mni-top
+  sell20_agg %>% 
+    filter(canteen_name == toString(i)) %>% 
+    filter(mni_present == 1) %>% 
+    group_by(date, meal_description) %>% 
+    summarise(tot = n()) %>% 
+    drop_na(meal_description) %>% 
+    arrange(-tot) %>% 
+    top_n(10) %>% 
+    readr::write_delim(., here::here("processed data", paste0(i,"_top_mni_present.csv")), delim = ",")
+  
+  #no mni top10
+  sell20_agg %>% 
+    filter(canteen_name == toString(i)) %>% 
+    filter(mni_present == 0) %>% 
+    group_by(date, meal_description) %>% 
+    summarise(tot = n()) %>% 
+    drop_na(meal_description) %>% 
+    arrange(-tot) %>% 
+    top_n(10) %>% 
+    readr::write_delim(., here::here("processed data", paste0(i ,"_top_no_mni.csv")),
+                       delim = ",")
+  
+}
+
+
+
+```
+
+
+
